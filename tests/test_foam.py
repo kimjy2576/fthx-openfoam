@@ -218,3 +218,46 @@ class TestProbeAir:
         from foam.openfoam import write_case
         with _pt.raises(NotImplementedError):
             write_case(presets.probe(), str(tmp_path / "c"), mode="cht")
+
+
+@needs_cad
+@needs_cp
+class TestCellCase:
+    """D 모드 — 주기 단위셀 (핀 실형상). core 의 cell.py 를 그대로 씀"""
+
+    def test_cell_case_files(self, tmp_path):
+        from fthx import presets
+        from foam.cell_case import write_cell_case
+        r = write_cell_case(presets.PRESETS["cell"](), str(tmp_path / "c"),
+                            force=True)
+        c = tmp_path / "c"
+        for f in ("system/blockMeshDict", "system/snappyHexMeshDict",
+                  "0/U", "0/p", "0/T", "constant/transportProperties",
+                  "Allrun.mesh"):
+            assert (c / f).exists(), f
+        # 관만 STL — 핀·경계는 blockMesh 가 담당
+        assert set(r["stl"]) == {"solid_tube_r01", "solid_tube_r02"}
+        assert not (c / "constant/triSurface/solid_fin.stl").exists()
+
+    def test_background_matches_air_domain(self, tmp_path):
+        """배경격자 z 범위 = 핀 상면 ~ 핀사이 중앙 (공기만)"""
+        from fthx import presets, cell
+        from foam.cell_case import write_cell_case
+        p = presets.PRESETS["cell"]()
+        r = write_cell_case(p, str(tmp_path / "c"), force=True)
+        g = cell.cell_geometry(p)
+        assert abs(r["z_range_mm"][0] - g["t_f_half"]) < 1e-9
+        assert abs(r["z_range_mm"][1] - g["Lz"]) < 1e-9
+
+    def test_laminar_and_symmetry(self, tmp_path):
+        """Re_Dh<2300 층류 — 난류 모델을 켜면 h 과대평가 (cell_flow 경고)"""
+        from fthx import presets
+        from foam.cell_case import write_cell_case
+        r = write_cell_case(presets.PRESETS["cell"](), str(tmp_path / "c"),
+                            force=True)
+        assert r["flow"]["regime"] == "laminar"
+        tp = (tmp_path / "c/constant/turbulenceProperties").read_text("utf-8")
+        assert "laminar" in tp
+        bm = (tmp_path / "c/system/blockMeshDict").read_text("utf-8")
+        assert bm.count("symmetryPlane") == 3      # sym_z, sym_y0, sym_y1
+        assert "fin_wall" in bm

@@ -35,4 +35,5 @@ F0 ✅ STL(3종 검증) → F1+F2 ✅ 메시(tutorial 39,626셀 · cellZone 검�
 → F3 ✅ 공기측 simpleFoam (ΔP=7.88 Pa @2m/s, f=C2 단독 폐합)
 → B안 열전달 ✅ (buoyantSimpleFoam + 체적 열원 + externalWallHeatFlux,
    UA_CFD 3.38 vs 예측 3.349 W/K)  → O3 probe ✅ (95,700셀, UA 8.114 vs 예측 8.038 — 0.95%)
-   →  다음: Fluent 교차비교(O5) / cht 확장
+   → D 모드 단위셀 ✅ 메시(365,683셀·Mesh OK) + j/f 추출 배선
+   →  다음: 단위셀 수렴·f 정의 정렬 → closure 주입 → O5
