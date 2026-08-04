@@ -83,7 +83,6 @@ if [ "${FTHX_SOLVE:-1}" = "1" ]; then
         failed=$(grep -oE "log\.[A-Za-z]+" /tmp/fthx_solve.log | tail -1)
         die "솔버 실패" "$CASE/${failed:-log.simpleFoam}"
     fi
-    grep -a -E "ΔP|Q_CFD|UA" /tmp/fthx_solve.log
 else
     echo "(건너뜀 — FTHX_SOLVE=0)"
 fi
