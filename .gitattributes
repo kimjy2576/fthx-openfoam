@@ -1,0 +1,6 @@
+# 스크립트·딕셔너리는 항상 LF (WSL 에서 실행됨)
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+Allrun* text eol=lf
+*.stl binary
