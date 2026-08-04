@@ -1,0 +1,4 @@
+out_foam/
+__pycache__/
+*.pyc
+.pytest_cache/
