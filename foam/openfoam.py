@@ -715,12 +715,19 @@ AVAIL=$(nproc)
 [ "$NP" -gt "$AVAIL" ] && NP=$AVAIL
 if [ "$NP" -gt 1 ] && command -v mpirun >/dev/null 2>&1; then
     sed -i "s/^numberOfSubdomains.*/numberOfSubdomains $NP;/" system/decomposeParDict
+    # 이전 실행의 processor* 를 먼저 제거 — -force 만으로는 코어 수가 바뀌거나
+    # 중간 실패로 남은 디렉터리가 섞여 "cannot find processorN/0/p" 로 죽음
+    rm -rf processor* processors*        # 코어 수가 다른 이전 분해 잔재 제거
     run decomposePar -force
+    # 분해 검산: 프로세서 수만큼 필드 전송이 있었는지 (collated/uncollated 무관)
+    NT=$(grep -c "field transfer" log.decomposePar || echo 0)
+    [ "$NT" -ge "$NP" ] || { echo "<<< decomposePar 불완전 — field transfer $NT/$NP"; exit 1; }
     echo ">>> $SOLVER (${NP}코어)"
     mpirun --oversubscribe --allow-run-as-root -np "$NP" "$SOLVER" -parallel > log.solver 2>&1 \
         || { echo "<<< $SOLVER 실패 — log.solver"; exit 1; }
     echo "<<< $SOLVER OK"
     run reconstructPar -latestTime
+    rm -rf processor*
 else
     echo ">>> $SOLVER (직렬)"
     "$SOLVER" > log.solver 2>&1 \
