@@ -174,7 +174,10 @@ mergeTolerance 1e-6;
         f'    includedAngle 150;\n    writeObj no;\n}}\n' for n in stl_names))
 
     # ── 물리: 층류·등온벽. 온도는 수동 스칼라가 아니라 에너지식으로
-    U, Tin, Tw = fl["u_max_ms"], fl["T_in_K"], fl["T_wall_K"]
+    # ⚠ 입구는 관이 없는 자유단면 — V_face 를 부과해야 코어 최소단면에서
+    #   u_max 가 재현됨. u_max 를 입구에 주면 코어가 (u_max/V_face) 배
+    #   더 빨라져 ΔP 가 ~2 배, h 도 과대평가됨 (실측: f 0.102→과대)
+    U, Tin, Tw = fl["V_face_ms"], fl["T_in_K"], fl["T_wall_K"]
     xc0, xc1 = g["x_core"]
     nu = fl["mu"] / fl["rho"]
     walls = '"(fin_wall|solid_tube.*)"'
@@ -328,6 +331,39 @@ echo "──────── 메시 요약 ────────"
 grep -E "^Snapped mesh|  cells:" log.snappyHexMesh log.checkMesh | tail -2
 grep -E "Max aspect ratio|Mesh OK|Failed .* mesh checks" log.checkMesh
 """
+    solve = """#!/usr/bin/env bash
+cd "$(dirname "$0")"
+if ! command -v simpleFoam >/dev/null 2>&1; then
+    for rc in /usr/lib/openfoam/openfoam*/etc/bashrc; do
+        [ -f "$rc" ] && source "$rc" && break
+    done
+fi
+set -e
+NP=${FTHX_NP:-8}; A=$(nproc); [ "$NP" -gt "$A" ] && NP=$A
+if [ "$NP" -gt 1 ] && command -v mpirun >/dev/null 2>&1; then
+    sed -i "s/^numberOfSubdomains.*/numberOfSubdomains $NP;/" system/decomposeParDict
+    rm -rf processor* processors*
+    decomposePar -force > log.decomposePar 2>&1
+    echo ">>> simpleFoam (${NP}코어)"
+    mpirun --oversubscribe --allow-run-as-root -np "$NP" simpleFoam -parallel \
+        > log.solver 2>&1 || { echo "<<< 실패 — log.solver"; exit 1; }
+    reconstructPar -latestTime > log.reconstructPar 2>&1
+    rm -rf processor*
+else
+    echo ">>> simpleFoam (직렬)"
+    simpleFoam > log.solver 2>&1 || { echo "<<< 실패 — log.solver"; exit 1; }
+fi
+echo "<<< simpleFoam OK"
+val() { d=$(ls -d postProcessing/$1/*/ | tail -1); tail -n1 "${d}surfaceFieldValue.dat" | awk '{print $2}'; }
+echo "──────── 단위셀 결과 (kinematic p, T[K]) ────────"
+printf "pCore0 %s\npCore1 %s\npIn %s\npOut %s\nTout %s\n" \
+    "$(val pCore0)" "$(val pCore1)" "$(val pIn)" "$(val pOut)" "$(val Tout)"
+echo "→ 이 값을 foam.cell_case.report_jf() 에 넣으면 j/f 가 나옴"
+"""
+    sf = case / "Allrun.solve"
+    sf.write_text(solve, encoding="utf-8", newline="\n")
+    sf.chmod(0o755)
+
     ar = case / "Allrun.mesh"
     ar.write_text(allrun, encoding="utf-8", newline="\n")
     ar.chmod(0o755)
@@ -337,3 +373,22 @@ grep -E "Max aspect ratio|Mesh OK|Failed .* mesh checks" log.checkMesh
             "z_range_mm": [z0, Lz], "tol_mm": tol,
             "gate": {"cells_est": sz["cells_est"],
                      "aspect_ratio": sz["aspect_ratio"]}}
+
+
+def report_jf(p: FTHXParams, pCore0: float, pCore1: float,
+              Tout_K: float, pIn: float = None, pOut: float = None) -> dict:
+    """Allrun.solve 출력 → j/f. core 의 extract_jf 를 그대로 호출."""
+    g = CELL.cell_geometry(p)
+    fl = CELL.cell_flow(p)
+    rho, cp = fl["rho"], fl["cp"]
+    A_in = (g["Ly"] * (g["Lz"] - g["t_f_half"])) / 1e6          # [m²]
+    m_dot = rho * fl["V_face_ms"] * A_in
+    q = m_dot * cp * (fl["T_in_K"] - Tout_K)
+    A = CELL.heat_area_m2(p)
+    out = CELL.extract_jf(p, (pCore0 - pCore1) * rho, q, Tout_K, A)
+    out["dp_total_Pa"] = ((pIn - pOut) * rho
+                          if pIn is not None and pOut is not None else None)
+    out["m_dot_kgs"] = m_dot
+    out["effectiveness"] = ((fl["T_in_K"] - Tout_K)
+                            / (fl["T_in_K"] - fl["T_wall_K"]))
+    return out
