@@ -113,12 +113,6 @@ class TestFoamCase:
         pl = plan(presets.tutorial())
         assert pl["h_at"][f"level{pl['lv_wall']}"] < pl["t_wall_mm"]
 
-    def test_probe_not_implemented(self, tmp_path):
-        import pytest as _pt
-        from fthx import presets
-        from foam.openfoam import write_case
-        with _pt.raises(NotImplementedError):
-            write_case(presets.probe(), str(tmp_path / "p"))
 
     def test_no_crlf_in_case_files(self, tmp_path):
         """실측 함정 회귀: Windows 에서 생성 시 CRLF 이 들어가면
