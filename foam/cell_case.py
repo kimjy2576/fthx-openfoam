@@ -175,6 +175,7 @@ mergeTolerance 1e-6;
 
     # ── 물리: 층류·등온벽. 온도는 수동 스칼라가 아니라 에너지식으로
     U, Tin, Tw = fl["u_max_ms"], fl["T_in_K"], fl["T_wall_K"]
+    xc0, xc1 = g["x_core"]
     nu = fl["mu"] / fl["rho"]
     walls = '"(fin_wall|solid_tube.*)"'
     w("0/U", f"""
@@ -267,6 +268,32 @@ functions
         field           T;
         schemesField    T;
         writeControl    writeTime;
+    }}
+    // 코어 전후 단면 — 상관식 f 는 코어만 기준이므로 여기서 dp 를 읽어야 함
+    // (입출구 dp 는 상하류 연장 마찰까지 포함 → f 가 과대)
+    pCore0
+    {{
+        type surfaceFieldValue; libs (fieldFunctionObjects);
+        regionType sampledSurface;
+        name coreIn;
+        sampledSurfaceDict {{ type plane; planeType pointAndNormal;
+                 pointAndNormalDict {{ point ({xc0/1000:.6f} 0 0);
+                                      normal (1 0 0); }}
+                             interpolate true; }}
+        operation areaAverage; fields (p);
+        writeFields no; writeControl timeStep; writeInterval 50; log no;
+    }}
+    pCore1
+    {{
+        type surfaceFieldValue; libs (fieldFunctionObjects);
+        regionType sampledSurface;
+        name coreOut;
+        sampledSurfaceDict {{ type plane; planeType pointAndNormal;
+                 pointAndNormalDict {{ point ({xc1/1000:.6f} 0 0);
+                                      normal (1 0 0); }}
+                             interpolate true; }}
+        operation areaAverage; fields (p);
+        writeFields no; writeControl timeStep; writeInterval 50; log no;
     }}
     pIn  {{ type surfaceFieldValue; libs (fieldFunctionObjects);
            regionType patch; name cell_inlet; operation areaAverage;
