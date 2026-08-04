@@ -64,7 +64,8 @@ grep -E "^\[OK\]|level:" /tmp/fthx_case.log
 step "4/4 메싱 + 검산 (~/cases/case_tutorial)"
 CASE="$HOME/cases/case_tutorial"
 rm -rf "$CASE" && mkdir -p "$HOME/cases" && cp -r out_foam/case_tutorial "$CASE"
-if ! ( cd "$CASE" && ./Allrun.mesh ) | tee /tmp/fthx_mesh.log; then
+( cd "$CASE" && ./Allrun.mesh ) 2>&1 | tee /tmp/fthx_mesh.log
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     failed=$(grep -oE "log\.[A-Za-z]+" /tmp/fthx_mesh.log | tail -1)
     die "메싱 실패" "$CASE/${failed:-log.snappyHexMesh}"
 fi
@@ -77,8 +78,10 @@ fi
 
 step "5/5 솔버 (simpleFoam, FTHX_NP=${FTHX_NP:-8}코어) — 수 분 소요"
 if [ "${FTHX_SOLVE:-1}" = "1" ]; then
-    if ! ( cd "$CASE" && ./Allrun.solve ) | tee /tmp/fthx_solve.log; then
-        die "솔버 실패" "$CASE/log.simpleFoam"
+    ( cd "$CASE" && ./Allrun.solve ) 2>&1 | tee /tmp/fthx_solve.log
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        failed=$(grep -oE "log\.[A-Za-z]+" /tmp/fthx_solve.log | tail -1)
+        die "솔버 실패" "$CASE/${failed:-log.simpleFoam}"
     fi
     grep -E "ΔP" /tmp/fthx_solve.log
 else

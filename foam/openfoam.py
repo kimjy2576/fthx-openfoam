@@ -701,7 +701,8 @@ method scotch;
     allrun = r"""#!/usr/bin/env bash
 # 솔버 실행 + ΔP 추출.  코어 수: FTHX_NP (기본 8, nproc 상한)
 cd "$(dirname "$0")"
-if ! command -v simpleFoam >/dev/null 2>&1; then
+SOLVER=__SOLVER__
+if ! command -v "$SOLVER" >/dev/null 2>&1; then
     for rc in /usr/lib/openfoam/openfoam*/etc/bashrc; do
         [ -f "$rc" ] && source "$rc" && break
     done
@@ -715,28 +716,29 @@ AVAIL=$(nproc)
 if [ "$NP" -gt 1 ] && command -v mpirun >/dev/null 2>&1; then
     sed -i "s/^numberOfSubdomains.*/numberOfSubdomains $NP;/" system/decomposeParDict
     run decomposePar -force
-    echo ">>> simpleFoam (${NP}코어)"
-    mpirun -np "$NP" simpleFoam -parallel > log.simpleFoam 2>&1 \
-        || { echo "<<< simpleFoam 실패 — log.simpleFoam"; exit 1; }
-    echo "<<< simpleFoam OK"
+    echo ">>> $SOLVER (${NP}코어)"
+    mpirun --oversubscribe --allow-run-as-root -np "$NP" "$SOLVER" -parallel > log.solver 2>&1 \
+        || { echo "<<< $SOLVER 실패 — log.solver"; exit 1; }
+    echo "<<< $SOLVER OK"
     run reconstructPar -latestTime
 else
-    echo ">>> simpleFoam (직렬)"
-    simpleFoam > log.simpleFoam 2>&1 \
-        || { echo "<<< simpleFoam 실패 — log.simpleFoam"; exit 1; }
-    echo "<<< simpleFoam OK"
+    echo ">>> $SOLVER (직렬)"
+    "$SOLVER" > log.solver 2>&1 \
+        || { echo "<<< $SOLVER 실패 — log.solver"; exit 1; }
+    echo "<<< $SOLVER OK"
 fi
 
 # 재시작하면 postProcessing/<fn>/<시작시각>/ 이 여럿 생김 — 최신 것을 읽음
 latest() { ls "postProcessing/$1" | sort -n | tail -1; }
 PIN=$(tail -1 "postProcessing/pIn/$(latest pIn)/surfaceFieldValue.dat" | awk '{print $2}')
 POUT=$(tail -1 "postProcessing/pOut/$(latest pOut)/surfaceFieldValue.dat" | awk '{print $2}')
-grep -E "SIMPLE solution converged|end time" log.simpleFoam | tail -1 || true
+grep -E "SIMPLE solution converged|End" log.solver | tail -1 || true
 awk -v a="$PIN" -v b="$POUT" -v r="__RHO__" -v t="__THERMAL__" 'BEGIN{
     if (t=="1") printf "ΔP_CFD  = %.3f Pa\n", a-b;
     else printf "ΔP_CFD  = %.3f Pa  (kinematic %.4f x rho %.4f)\n", (a-b)*r, a-b, r}'
 echo "ΔP_core(해석해, Fluent 와 동일 상관식) = __DPREF__ Pa — CFD 는 덕트·관 항력만큼 이보다 커야 함"
 """
+    allrun = allrun.replace("__SOLVER__", solver)
     allrun = allrun.replace("__RHO__", f"{rho:.4f}")
     allrun = allrun.replace("__THERMAL__", "1" if thermal else "0")
     if thermal:
