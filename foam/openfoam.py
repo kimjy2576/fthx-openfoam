@@ -290,7 +290,7 @@ grep -E "Mesh OK|Failed .* mesh checks" log.checkMesh
 
 
 def write_case(p: FTHXParams, case_dir: str, force: bool = False,
-               mode: str = "air") -> dict:
+               mode: str = "air", thermal: bool = True) -> dict:
     """tutorial 급 형상의 snappy 케이스 생성. 반환: plan + 파일 목록.
 
     mode="air": 공기측 단일 region — fluid_ref 제외, 관 표면=wall patch.
@@ -362,7 +362,7 @@ def write_case(p: FTHXParams, case_dir: str, force: bool = False,
     pl["surfaces"] = {n: e["level"] for n, e in entries.items() if not e["zone"]}
     pl["mode"] = mode
     if mode == "air":
-        pl["physics"] = write_physics(p, case)
+        pl["physics"] = write_physics(p, case, thermal=thermal)
     pl["case_dir"] = str(case)
     pl["gate"] = {
         "fluent_ref_cells": 68641,
@@ -399,10 +399,21 @@ def porous_df(p: FTHXParams) -> dict:
             "U_face": p.operating.air.V_face}
 
 
-def write_physics(p: FTHXParams, case: Path) -> dict:
-    """0/ · constant/ · fvOptions · 솔버용 system · Allrun.solve 생성."""
+def write_physics(p: FTHXParams, case: Path, thermal: bool = True) -> dict:
+    """0/ · constant/ · fvOptions · 솔버용 system · Allrun.solve 생성.
+
+    thermal=True → buoyantSimpleFoam + 열 폐합 (B안):
+      · 포러스 코어: q\u2034 = hv·(T_ref − T),  hv = η_o·h·a_v  [Fluent M4 와 동일]
+        엔탈피 기준으로 변환: Su = hv·T_ref,  Sp = −hv/cp   (S = Su + Sp·h)
+      · 관 표면: externalWallHeatFluxTemperature (h_ref, T_sat)
+        Bi = h·t/k ≈ 6e-4 이므로 관벽을 셀로 풀 필요 없음 = B안의 근거
+    thermal=False → simpleFoam 등온 (ΔP 만)
+    """
+    from . import _thermal_closure as TC          # noqa
     pf = porous_df(p)
     U, nu, rho = pf["U_face"], pf["nu"], pf["rho"]
+    th = TC.thermal_closure(p) if thermal else None
+    UA = TC.ua_predicted(p)["UA_W_K"] if thermal else 0.0
     dk = p.duct_box
     H = (dk["y1"] - dk["y0"]) / 1000.0                # 덕트 높이 [m]
     I, L = 0.05, 0.1 * H                              # 난류강도 5%, 길이척도 0.1H
@@ -427,15 +438,20 @@ boundaryField
     {wall_re}  {{ type noSlip; }}
 }}
 """)
-    w("0/p", """
-dimensions [0 2 -2 0 0 0 0];
-internalField uniform 0;
+    p_dim = "[1 -1 -2 0 0 0 0]" if thermal else "[0 2 -2 0 0 0 0]"
+    p_val = f"{p.operating.air.P_in}" if thermal else "0"
+    w("0/p", f"""
+dimensions {p_dim};
+internalField uniform {p_val};
 boundaryField
-{
-    air_inlet  { type zeroGradient; }
-    air_outlet { type fixedValue; value uniform 0; }
-    """ + wall_re + """ { type zeroGradient; }
-}
+{{
+    air_inlet  {{ type {"calculated" if thermal else "zeroGradient"};
+                  value uniform {p_val}; }}
+    air_outlet {{ type {"calculated" if thermal else "fixedValue"};
+                  value uniform {p_val}; }}
+    {wall_re}  {{ type {"calculated" if thermal else "zeroGradient"};
+                  value uniform {p_val}; }}
+}}
 """)
     w("0/k", f"""
 dimensions [0 2 -2 0 0 0 0];
@@ -467,12 +483,100 @@ boundaryField
     {wall_re}  {{ type nutkWallFunction; value uniform 0; }}
 }}
 """)
+    if thermal:
+        Tin = p.operating.air.T_in + 273.15
+        w("0/T", f"""
+dimensions [0 0 0 1 0 0 0];
+internalField uniform {Tin:.4f};
+boundaryField
+{{
+    air_inlet  {{ type fixedValue; value uniform {Tin:.4f}; }}
+    air_outlet {{ type inletOutlet; inletValue uniform {Tin:.4f};
+                  value uniform {Tin:.4f}; }}
+    duct_wall  {{ type zeroGradient; }}
+    "solid_tube.*"
+    {{
+        // B안: 관벽을 셀로 풀지 않고 두께·물성으로 처리 (Bi≈6e-4)
+        type            externalWallHeatFluxTemperature;
+        mode            coefficient;
+        h               uniform {th['h_ref_W_m2K']:.4f};   // 관내 냉매측
+        Ta              uniform {th['T_ref_K']:.4f};
+        thicknessLayers ({th['t_wall_m']:.6e});
+        kappaLayers     ({th['k_tube']:.4f});
+        kappaMethod     fluidThermo;
+        value           uniform {Tin:.4f};
+    }}
+}}
+""")
+        w("0/alphat", f"""
+dimensions [1 -1 -1 0 0 0 0];
+internalField uniform 0;
+boundaryField
+{{
+    air_inlet  {{ type calculated; value uniform 0; }}
+    air_outlet {{ type calculated; value uniform 0; }}
+    {wall_re}  {{ type compressible::alphatWallFunction; Prt 0.85;
+                  value uniform 0; }}
+}}
+""")
+        # buoyantSimpleFoam 은 p_rgh 를 씀 (p 는 절대압 [Pa])
+        Pop = p.operating.air.P_in
+        w("0/p_rgh", f"""
+dimensions [1 -1 -2 0 0 0 0];
+internalField uniform {Pop};
+boundaryField
+{{
+    air_inlet  {{ type fixedFluxPressure; value uniform {Pop}; }}
+    air_outlet {{ type fixedValue; value uniform {Pop}; }}
+    {wall_re}  {{ type fixedFluxPressure; value uniform {Pop}; }}
+}}
+""")
+        w("constant/thermophysicalProperties", f"""
+thermoType
+{{
+    type            heRhoThermo;
+    mixture         pureMixture;
+    transport       const;
+    thermo          hConst;
+    equationOfState incompressiblePerfectGas;
+    specie          specie;
+    energy          sensibleEnthalpy;
+}}
+pRef {Pop};
+mixture
+{{
+    specie          {{ molWeight 28.96; }}
+    thermodynamics  {{ Cp {th['cp']:.2f}; Hf 0; }}
+    transport       {{ mu {th['mu']:.6e}; Pr {th['Pr']:.4f}; }}
+    equationOfState {{ pRef {Pop}; }}
+}}
+""")
+        w("constant/g", """
+dimensions [0 1 -2 0 0 0 0];
+value (0 0 0);
+""", obj="g")
+
     w("constant/transportProperties",
       f"\ntransportModel Newtonian;\nnu {nu:.6e};\n")
     w("constant/turbulenceProperties", """
 simulationType RAS;
 RAS { RASModel kEpsilon; turbulence on; printCoeffs off; }
 """)
+    heat_src = "" if not thermal else f"""
+coreHeat
+{{
+    type            scalarSemiImplicitSource;
+    active          yes;
+    selectionMode   cellZone;
+    cellZone        {core};
+    volumeMode      specific;                 // [W/m3]
+    // q‴ = hv*(T_ref - T),  h = cp*T  ->  Su + Sp*h
+    sources
+    {{
+        h  ({th['Su']:.6e} {th['Sp']:.6e});
+    }}
+}}
+"""
     w("system/fvOptions", f"""
 porousCore
 {{
@@ -492,7 +596,7 @@ porousCore
         }}
     }}
 }}
-""")
+""" + heat_src)
     w("system/fvSchemes", """
 ddtSchemes      { default steadyState; }
 gradSchemes     { default cellLimited Gauss linear 1; }
@@ -502,6 +606,11 @@ divSchemes
     div(phi,U)                  bounded Gauss linearUpwind grad(U);
     div(phi,k)                  bounded Gauss upwind;
     div(phi,epsilon)            bounded Gauss upwind;
+    div(phi,h)                  bounded Gauss upwind;
+    div(phi,K)                  bounded Gauss upwind;
+    div(phi,e)                  bounded Gauss upwind;
+    div(phi,Ekp)                bounded Gauss upwind;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 laplacianSchemes { default Gauss linear limited corrected 0.33; }
@@ -512,24 +621,41 @@ wallDist        { method meshWave; }
     w("system/fvSolution", """
 solvers
 {
-    p       { solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.01; }
-    "(U|k|epsilon)" { solver smoothSolver; smoother symGaussSeidel;
+    "(p|p_rgh)" { solver GAMG; smoother GaussSeidel; tolerance 1e-7; relTol 0.01; }
+    "(U|h|e|k|epsilon)" { solver smoothSolver; smoother symGaussSeidel;
                       tolerance 1e-8; relTol 0.1; }
 }
 SIMPLE
 {
     nNonOrthogonalCorrectors 1;
     consistent no;
-    residualControl { p 1e-4; U 1e-5; "(k|epsilon)" 1e-5; }
+    residualControl { "(p|p_rgh)" 1e-4; U 1e-5; "(h|k|epsilon)" 1e-5; }
 }
 relaxationFactors
 {
-    fields    { p 0.3; }
-    equations { U 0.7; "(k|epsilon)" 0.7; }
+    fields    { "(p|p_rgh)" 0.3; rho 1.0; }
+    equations { U 0.7; "(h|k|epsilon)" 0.7; }
 }
 """, obj="fvSolution")
-    w("system/controlDict", """
-application     simpleFoam;
+    solver = "buoyantSimpleFoam" if thermal else "simpleFoam"
+    thermo_fn = "" if not thermal else f"""
+    Tin
+    {{
+        type surfaceFieldValue; libs (fieldFunctionObjects);
+        regionType patch; name air_inlet; operation areaAverage;
+        fields (T); writeFields no; writeControl timeStep;
+        writeInterval 20; log no;
+    }}
+    Tout
+    {{
+        type surfaceFieldValue; libs (fieldFunctionObjects);
+        regionType patch; name air_outlet; operation weightedAreaAverage;
+        weightField phi; fields (T); writeFields no;
+        writeControl timeStep; writeInterval 20; log no;
+    }}
+"""
+    w("system/controlDict", f"""
+application     {solver};
 startFrom       latestTime;
 startTime       0;
 stopAt          endTime;
@@ -539,9 +665,9 @@ writeControl    timeStep;
 writeInterval   500;
 purgeWrite      2;
 functions
-{
+{{
     pIn
-    {
+    {{
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
         regionType      patch;
@@ -552,9 +678,9 @@ functions
         writeControl    timeStep;
         writeInterval   20;
         log             no;
-    }
+    }}
     pOut
-    {
+    {{
         type            surfaceFieldValue;
         libs            (fieldFunctionObjects);
         regionType      patch;
@@ -565,8 +691,8 @@ functions
         writeControl    timeStep;
         writeInterval   20;
         log             no;
-    }
-}
+    }}
+""" + thermo_fn + """}
 """, obj="controlDict")
     w("system/decomposeParDict", """
 numberOfSubdomains 8;
@@ -606,13 +732,33 @@ latest() { ls "postProcessing/$1" | sort -n | tail -1; }
 PIN=$(tail -1 "postProcessing/pIn/$(latest pIn)/surfaceFieldValue.dat" | awk '{print $2}')
 POUT=$(tail -1 "postProcessing/pOut/$(latest pOut)/surfaceFieldValue.dat" | awk '{print $2}')
 grep -E "SIMPLE solution converged|end time" log.simpleFoam | tail -1 || true
-awk -v a="$PIN" -v b="$POUT" -v r="__RHO__" 'BEGIN{
-    printf "ΔP_CFD  = %.3f Pa  (kinematic %.4f m2/s2 x rho %.4f)\n", (a-b)*r, a-b, r}'
+awk -v a="$PIN" -v b="$POUT" -v r="__RHO__" -v t="__THERMAL__" 'BEGIN{
+    if (t=="1") printf "ΔP_CFD  = %.3f Pa\n", a-b;
+    else printf "ΔP_CFD  = %.3f Pa  (kinematic %.4f x rho %.4f)\n", (a-b)*r, a-b, r}'
 echo "ΔP_core(해석해, Fluent 와 동일 상관식) = __DPREF__ Pa — CFD 는 덕트·관 항력만큼 이보다 커야 함"
 """
     allrun = allrun.replace("__RHO__", f"{rho:.4f}")
+    allrun = allrun.replace("__THERMAL__", "1" if thermal else "0")
+    if thermal:
+        allrun += f"""
+TIN=$(tail -1 "postProcessing/Tin/$(latest Tin)/surfaceFieldValue.dat" | awk '{{print $2}}')
+TOUT=$(tail -1 "postProcessing/Tout/$(latest Tout)/surfaceFieldValue.dat" | awk '{{print $2}}')
+awk -v i="$TIN" -v o="$TOUT" -v m="{th['m_dot_air_kgs']:.6f}" -v c="{th['cp']:.2f}" \\
+    -v tr="{th['T_ref_K']:.2f}" 'BEGIN{{
+    dT=i-o; Q=m*c*dT;
+    lm=((i-tr)-(o-tr))/log(((i-tr)/(o-tr)));
+    printf "Q_CFD   = %.2f W   (T_in %.2f K → T_out %.2f K, ΔT %.2f K)\\n", Q, i, o, dT;
+    printf "UA_CFD  = %.3f W/K  (LMTD %.2f K)\\n", Q/lm, lm;
+}}'
+echo "UA_예측(closure) = {UA:.3f} W/K   — 게이트: 오차 15% 이내"
+"""
     allrun = allrun.replace("__DPREF__", f"{pf['dp_core_Pa']:.3f}")
     ar = case / "Allrun.solve"
     ar.write_text(allrun, encoding="utf-8", newline="\n")
     ar.chmod(0o755)
-    return {k: pf[k] for k in ("d", "f", "dp_core_Pa", "nu", "rho", "U_face")}
+    out = {k: pf[k] for k in ("d", "f", "dp_core_Pa", "nu", "rho", "U_face")}
+    out["solver"] = solver
+    if thermal:
+        out.update({"hv_W_m3K": th["hv_W_m3K"], "h_ref": th["h_ref_W_m2K"],
+                    "Bi": th["Bi"], "UA_pred_W_K": UA})
+    return out

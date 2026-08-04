@@ -130,3 +130,45 @@ class TestFoamCase:
             if f.is_file() and f.suffix != ".stl":
                 assert b"\r" not in f.read_bytes(), f.name
 
+
+
+@needs_cad
+@needs_cp
+class TestThermalB:
+    """B안 — 관벽을 셀로 풀지 않고 두께=물성으로 (Bi≪1)"""
+
+    def test_enthalpy_source_offset(self):
+        """실측 함정 회귀: sensibleEnthalpy 는 h=cp(T−T_std).
+           T_std 오프셋을 빼면 목표온도가 T_ref+T_std 가 되어 가열됨"""
+        from fthx import presets
+        from foam._thermal_closure import thermal_closure, T_STD
+        t = thermal_closure(presets.tutorial())
+        # S(T=T_ref) == 0 이어야 냉매온도에서 열원이 사라짐
+        h_at_Tref = t["cp"] * (t["T_ref_K"] - T_STD)
+        assert abs(t["Su"] + t["Sp"] * h_at_Tref) < 1e-6
+        assert t["Su"] < 0        # T_ref < T_std 이므로
+
+    def test_thermal_case_files(self, tmp_path):
+        from fthx import presets
+        from foam.openfoam import write_case
+        pl = write_case(presets.tutorial(), str(tmp_path / "t"), force=True,
+                        thermal=True)
+        c = tmp_path / "t"
+        for f in ("0/T", "0/alphat", "0/p_rgh", "constant/g",
+                  "constant/thermophysicalProperties"):
+            assert (c / f).exists(), f
+        assert pl["physics"]["solver"] == "buoyantSimpleFoam"
+        T = (c / "0/T").read_text("utf-8")
+        assert "externalWallHeatFluxTemperature" in T   # B안 관벽
+        assert "thicknessLayers" in T and "kappaLayers" in T
+        fv = (c / "system/fvOptions").read_text("utf-8")
+        assert "scalarSemiImplicitSource" in fv         # v2412 정식 이름
+        assert pl["physics"]["Bi"] < 0.1                # B안 성립 조건
+
+    def test_isothermal_still_works(self, tmp_path):
+        from fthx import presets
+        from foam.openfoam import write_case
+        pl = write_case(presets.tutorial(), str(tmp_path / "i"), force=True,
+                        thermal=False)
+        assert pl["physics"]["solver"] == "simpleFoam"
+        assert not (tmp_path / "i/0/T").exists()

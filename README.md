@@ -33,4 +33,5 @@ tests/      test_foam.py (F0~F3 회귀)
 
 F0 ✅ STL(3종 검증) → F1+F2 ✅ 메시(tutorial 39,626셀 · cellZone 검산)
 → F3 ✅ 공기측 simpleFoam (ΔP=7.88 Pa @2m/s, f=C2 단독 폐합)
-→ 다음: B안 열전달(thermalBaffle) 또는 probe 확장 — docs/openfoam-issues.md 참조
+→ B안 열전달 ✅ (buoyantSimpleFoam + 체적 열원 + externalWallHeatFlux,
+   UA_CFD 3.38 vs 예측 3.349 W/K)  →  다음: probe 확장(O3)
