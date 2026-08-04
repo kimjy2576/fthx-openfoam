@@ -190,3 +190,37 @@ class TestThermalB:
             head = f.read_text("utf-8")[:400]
             assert f"class       {cls};" in head, f"{name}: {cls} 아님"
             assert 'location    "0";' in head, name
+
+
+@needs_cad
+@needs_cp
+class TestProbeAir:
+    """O3 — probe(벤드·관3개). air 모드는 벤드가 공기 도메인 밖이라 무관"""
+
+    def test_probe_air_drops_bends(self, tmp_path):
+        from fthx import presets
+        from foam.openfoam import write_case
+        pl = write_case(presets.probe(), str(tmp_path / "p"), force=True)
+        ts = tmp_path / "p/constant/triSurface"
+        assert not list(ts.glob("*bend*")), "벤드 STL 이 남아있음"
+        assert set(pl["surfaces"]) == {f"solid_tube_r01t{i:02d}" for i in (1, 2, 3)}
+        assert set(pl["zones"]) == {"fluid_air_core_r01"}
+
+    def test_probe_bbox_is_duct_only(self, tmp_path):
+        """배경격자는 air_bbox(덕트) — 벤드가 나가는 global_bbox 가 아님"""
+        from fthx import presets
+        from foam.openfoam import write_case
+        p = presets.probe()
+        write_case(p, str(tmp_path / "p"), force=True)
+        bm = (tmp_path / "p/system/blockMeshDict").read_text("utf-8")
+        zs = [float(l.split()[2].rstrip(")")) for l in bm.splitlines()
+              if l.strip().startswith("(") and len(l.split()) == 3]
+        assert min(zs) >= p.duct_box["z0"] - 1e-6
+        assert max(zs) <= p.duct_box["z1"] + 1e-6
+
+    def test_probe_cht_still_blocked(self, tmp_path):
+        import pytest as _pt
+        from fthx import presets
+        from foam.openfoam import write_case
+        with _pt.raises(NotImplementedError):
+            write_case(presets.probe(), str(tmp_path / "c"), mode="cht")

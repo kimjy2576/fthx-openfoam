@@ -172,7 +172,8 @@ def _snappy_dict(p: FTHXParams, pl: dict, entries: dict[str, dict]) -> str:
             surf += (f"        {name}\n        {{\n"
                      f"            level ({lv} {lv});\n"
                      f"            patchInfo {{ type wall; }}\n        }}\n")
-    core = next(n for n in entries if n.startswith("fluid_air_core"))
+    cores = [n for n in entries if n.startswith("fluid_air_core")]
+    core = cores[0]
     return _hdr("snappyHexMeshDict") + f"""
 castellatedMesh true;
 snap            true;
@@ -312,10 +313,13 @@ def write_case(p: FTHXParams, case_dir: str, force: bool = False,
     mode="cht": 전 바디 cellZone (A-lite) — 메시만. conjugate 는 Phase 3 후반.
     """
     d = p.domain
-    if d.include_bends:
+    if d.include_bends and mode != "air":
+        # air 모드는 벤드가 공기 도메인 밖(덕트 z 범위 바깥)이라 무관하지만,
+        # cht 는 벤드·냉매를 cellZone 으로 잡아야 하므로 배경을 global_bbox
+        # 로 확장해야 함 — 미구현
         raise NotImplementedError(
-            "벤드 포함 형상(probe)은 배경격자를 global_bbox 로 잡는 확장이 "
-            "필요함 — Phase 5. 지금은 tutorial 급만 지원.")
+            "벤드 포함 형상의 cht 모드는 배경격자를 global_bbox 로 잡는 "
+            "확장이 필요함. air 모드를 쓸 것.")
     if not p.duct.sealed:
         raise NotImplementedError("덕트 간극(바이패스) 형상은 미지원 — Phase 5.")
 
@@ -353,6 +357,11 @@ def write_case(p: FTHXParams, case_dir: str, force: bool = False,
                 drop.append(n)      # 공기측 해석에는 냉매 도메인 불필요
         elif n.startswith("fluid_air_"):
             drop.append(n)          # 상·하류는 배경 그대로 (공기 연속체)
+        elif n.endswith("bend") or "_bend_" in n:
+            if mode == "air":
+                drop.append(n)      # 벤드는 덕트 z 범위 밖 = 공기와 무관
+            else:
+                entries[n] = {"level": pl["lv_ref"], "zone": True}
         else:
             entries[n] = {"level": pl["lv_ref"], "zone": mode == "cht"}
 
@@ -757,7 +766,6 @@ grep -E "SIMPLE solution converged|End" log.solver | tail -1 || true
 awk -v a="$PIN" -v b="$POUT" -v r="__RHO__" -v t="__THERMAL__" 'BEGIN{
     if (t=="1") printf "ΔP_CFD  = %.3f Pa\n", a-b;
     else printf "ΔP_CFD  = %.3f Pa  (kinematic %.4f x rho %.4f)\n", (a-b)*r, a-b, r}'
-echo "ΔP_core(해석해, Fluent 와 동일 상관식) = __DPREF__ Pa — CFD 는 덕트·관 항력만큼 이보다 커야 함"
 """
     allrun = allrun.replace("__SOLVER__", solver)
     allrun = allrun.replace("__RHO__", f"{rho:.4f}")

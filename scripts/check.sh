@@ -53,13 +53,13 @@ PYK="${FTHX_PYTEST_K:-Foam}"
 step "2/4 STL 생성 + surfaceCheck 교차검증"
 "$PY" scripts/make_stl.py > /tmp/fthx_stl.log 2>&1 \
     || die "make_stl 실패" /tmp/fthx_stl.log
-grep "^\[OK\]" /tmp/fthx_stl.log
+grep -a "^\[OK\]" /tmp/fthx_stl.log
 bash scripts/verify_stl.sh out_foam || die "surfaceCheck FAIL — 위 [FAIL] 로그 참조"
 
 step "3/4 케이스 생성 (tutorial)"
 "$PY" scripts/make_case.py tutorial > /tmp/fthx_case.log 2>&1 \
     || die "make_case 실패" /tmp/fthx_case.log
-grep -E "^\[OK\]|level:" /tmp/fthx_case.log
+grep -a -E "^\[OK\]|level:" /tmp/fthx_case.log
 
 step "4/4 메싱 + 검산 (~/cases/case_tutorial)"
 CASE="$HOME/cases/case_tutorial"
@@ -83,7 +83,7 @@ if [ "${FTHX_SOLVE:-1}" = "1" ]; then
         failed=$(grep -oE "log\.[A-Za-z]+" /tmp/fthx_solve.log | tail -1)
         die "솔버 실패" "$CASE/${failed:-log.simpleFoam}"
     fi
-    grep -E "ΔP" /tmp/fthx_solve.log
+    grep -a -E "ΔP|Q_CFD|UA" /tmp/fthx_solve.log
 else
     echo "(건너뜀 — FTHX_SOLVE=0)"
 fi
