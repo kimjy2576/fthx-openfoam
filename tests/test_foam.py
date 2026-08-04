@@ -172,3 +172,21 @@ class TestThermalB:
                         thermal=False)
         assert pl["physics"]["solver"] == "simpleFoam"
         assert not (tmp_path / "i/0/T").exists()
+
+    def test_field_headers_have_correct_class(self, tmp_path):
+        """실측 함정 회귀: 0/ 필드의 FoamFile class 가 dictionary 면
+           decomposePar 가 필드를 0개로 보고 processorN/0/ 을 만들지 않음
+           → 병렬에서 'cannot find processorN/0/p' (직렬은 통과)"""
+        from fthx import presets
+        from foam.openfoam import write_case
+        write_case(presets.tutorial(), str(tmp_path / "h"), force=True)
+        want = {"U": "volVectorField", "p": "volScalarField",
+                "p_rgh": "volScalarField", "T": "volScalarField",
+                "k": "volScalarField", "epsilon": "volScalarField",
+                "nut": "volScalarField", "alphat": "volScalarField"}
+        for name, cls in want.items():
+            f = tmp_path / "h" / "0" / name
+            assert f.exists(), name
+            head = f.read_text("utf-8")[:400]
+            assert f"class       {cls};" in head, f"{name}: {cls} 아님"
+            assert 'location    "0";' in head, name
