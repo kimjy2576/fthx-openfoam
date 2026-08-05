@@ -83,6 +83,10 @@ if [ "${FTHX_SOLVE:-1}" = "1" ]; then
         failed=$(grep -oE "log\.[A-Za-z]+" /tmp/fthx_solve.log | tail -1)
         die "솔버 실패" "$CASE/${failed:-log.simpleFoam}"
     fi
+    # 결과를 results.csv 로 (core 의 post 스키마)
+    "$PY" scripts/make_results.py "$CASE" tutorial > /tmp/fthx_res.log 2>&1 \
+        && grep -a -E "UA_W_K|UA_pred|UA_err|^\[OK\]" /tmp/fthx_res.log \
+        || echo "(results.csv 생성 실패 — /tmp/fthx_res.log)"
 else
     echo "(건너뜀 — FTHX_SOLVE=0)"
 fi

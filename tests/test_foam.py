@@ -345,3 +345,75 @@ class TestJfInject:
         V = core_volume_m3(p)
         assert abs(u["UA_air_W_K"] - t["hv_air_W_m3K"] * V) < 1e-9
         assert abs(u["UA_W_K"] - t["hv_W_m3K"] * V) < 1e-9      # hv_eff 정의
+
+
+@needs_cad
+@needs_cp
+class TestResults:
+    """F5 — results.csv (core 의 post.py 스키마 그대로)"""
+
+    def _fake_case(self, tmp_path, thermal=True):
+        """postProcessing 구조만 흉내낸 최소 케이스"""
+        c = tmp_path / "case"
+        (c / "0").mkdir(parents=True)
+        if thermal:
+            (c / "0" / "T").write_text("dummy", encoding="utf-8")
+        for name, val in (("pIn", 101333.1), ("pOut", 101325.0),
+                          ("Tout", 292.25)):
+            d = c / "postProcessing" / name / "0"
+            d.mkdir(parents=True)
+            (d / "surfaceFieldValue.dat").write_text(
+                f"# Time\tareaAverage\n50\t{val:.6e}\n", encoding="utf-8")
+        (c / "log.solver").write_text("SIMPLE solution converged in 281 iterations",
+                                      encoding="utf-8")
+        return c
+
+    def test_schema_matches_core_post(self, tmp_path):
+        """열 이름은 core 의 post.to_row 가 정함 — 여기서 새로 만들지 않음"""
+        from fthx import presets, post
+        from foam.results import write_results
+        p = presets.tutorial()
+        c = self._fake_case(tmp_path)
+        r = write_results(c, p)
+        base = post.to_row(p, post.metrics(p, {}))
+        for k in base:
+            assert k in r["row"], k
+        for k in ("dP_air_Pa", "Q_W", "UA_W_K", "UA_pred_W_K", "UA_err_pct"):
+            assert k in r["row"], k
+        assert r["row"]["path"] == "openfoam"
+        assert r["row"]["converged"] is True
+
+    def test_jf_source_recorded(self, tmp_path):
+        from fthx import presets
+        from foam.results import write_results
+        p = presets.tutorial()
+        jf = {"j": 0.042443, "f": 0.056622, "source": "openfoam_cell"}
+        a = write_results(self._fake_case(tmp_path / "a"), p)
+        b = write_results(self._fake_case(tmp_path / "b"), p, jf=jf)
+        assert a["row"]["jf_source"] == "closure"
+        assert b["row"]["jf_source"] == "openfoam_cell"
+        # 같은 CFD 값이라도 예측이 달라지므로 오차가 달라야 함
+        assert a["row"]["UA_pred_W_K"] < b["row"]["UA_pred_W_K"]
+
+    def test_rows_append(self, tmp_path):
+        import csv as _csv
+        from fthx import presets
+        from foam.results import write_results
+        p = presets.tutorial()
+        out = tmp_path / "results.csv"
+        write_results(self._fake_case(tmp_path / "a"), p, out)
+        write_results(self._fake_case(tmp_path / "b"), p, out,
+                      jf={"j": 0.0424, "f": 0.0566, "source": "cell"})
+        rows = list(_csv.DictReader(out.open(encoding="utf-8")))
+        assert len(rows) == 2
+        assert {r["jf_source"] for r in rows} == {"closure", "cell"}
+
+    def test_isothermal_scales_kinematic_p(self, tmp_path):
+        """등온(simpleFoam)은 p 가 kinematic — rho 를 곱해 Pa 로"""
+        from fthx import presets
+        from foam.results import read_case
+        p = presets.tutorial()
+        c = self._fake_case(tmp_path, thermal=False)
+        raw = read_case(c, p)
+        rho = p.operating_derived()["air"]["rho"]
+        assert abs(raw["p_air_in"] - 101333.1 * rho) < 1e-6

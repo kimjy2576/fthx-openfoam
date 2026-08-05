@@ -176,6 +176,8 @@ foam/       foam_stl.py    F0 STL 내보내기 + 3종 검증
             openfoam.py    F1~F3 blockMesh/snappy/물리 (B 모드 풀사이즈)
             cell_case.py   D 모드 주기 단위셀 → j/f
             _thermal_closure.py  열 폐합 (core closure 래퍼)
+            jf_inject.py   D→B 주입 (단위셀 j/f → 포러스·열 계수)
+            results.py     F5 후처리 → results.csv (core post 스키마)
 scripts/    check.sh(통합) · make_stl · make_case · verify_stl
 docs/       verify-routine.md · openfoam-issues.md (미해결 항목)
 tests/      test_foam.py (18개 회귀)
@@ -195,6 +197,7 @@ tests/      test_foam.py (18개 회귀)
 | **검증** | 상관식 기준 UA 2.981 vs 예측 2.971 (**+0.3%**) · 단위셀 j/f 주입 6.836 vs 7.501 (**−8.9%**) |
 | D 모드 | 358,525셀 수렴 · j=0.0424 f=0.0566 (상관식의 2.9/3.3배) |
 | D→B 주입 | `jf_inject.py` — 단위셀 j/f 로 포러스·열 계수 스케일 (C2∝f, h∝j) |
+| F5 후처리 | `results.py` — core 의 post.to_row 스키마 그대로, 상관식/단위셀 기준을 한 CSV 에 |
 
-다음: 단위셀 j/f 확정 → closure 주입(O2 해소) → Fluent 교차비교(O5).
+다음: 파라미터 스윕 → Fluent 교차비교(O5) → 단위셀 j/f 값 확정(D3).
 미해결 항목은 `docs/openfoam-issues.md` 참조.
