@@ -523,7 +523,7 @@ boundaryField
     duct_wall  {{ type zeroGradient; }}
     "solid_tube.*"
     {{
-        // B안: 관벽을 셀로 풀지 않고 두께·물성으로 처리 (Bi≈6e-4)
+        // B안: 관벽을 셀로 풀지 않고 두께·물성으로 처리 (Bi≈0.017)
         type            externalWallHeatFluxTemperature;
         mode            coefficient;
         h               uniform {th['h_ref_W_m2K']:.4f};   // 관내 냉매측
