@@ -391,7 +391,9 @@ def report_jf(p: FTHXParams, pCore0: float, pCore1: float,
     A_in = (Ly * z_hi) / 1e6                                    # [m²] 1/4 입구
     m_dot = rho * fl["V_face_ms"] * A_in
     q = m_dot * cp * (fl["T_in_K"] - Tout_K)
-    A = CELL.heat_area_m2(p)
+    # heat_area_m2 는 full-pitch 기준 — 우리 도메인은 1/4 이므로 4 로 나눔
+    # (y 대칭으로 관 원주 절반, z 대칭으로 핀 한 면만 노출)
+    A = CELL.heat_area_m2(p) / (4.0 if g.get("periodic") else 1.0)
     out = CELL.extract_jf(p, (pCore0 - pCore1) * rho, q, Tout_K, A)
     out["dp_total_Pa"] = ((pIn - pOut) * rho
                           if pIn is not None and pOut is not None else None)
