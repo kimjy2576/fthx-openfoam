@@ -84,11 +84,8 @@ if [ "${FTHX_SOLVE:-1}" = "1" ]; then
         die "솔버 실패" "$CASE/${failed:-log.simpleFoam}"
     fi
     # 결과를 results.csv 로 (core 의 post 스키마)
-    # ⚠ $PY 가 Windows python.exe 이면 WSL 경로(/home/...)를 못 읽음
-    #   → wslpath -w 로 UNC 경로(\\wsl$\...)로 변환해 넘김
-    CASE_W="$CASE"
-    case "$PY" in *python.exe) CASE_W=$(wslpath -w "$CASE" 2>/dev/null || echo "$CASE");; esac
-    "$PY" scripts/make_results.py "$CASE_W" tutorial > /tmp/fthx_res.log 2>&1 \
+    # 경로 정규화는 make_results.py 의 winpath() 가 담당 (WSL↔Windows)
+    "$PY" scripts/make_results.py "$CASE" tutorial > /tmp/fthx_res.log 2>&1 \
         && grep -a -E "UA_W_K|UA_pred|UA_err|^\[OK\]" /tmp/fthx_res.log \
         || echo "(results.csv 생성 실패 — /tmp/fthx_res.log)"
 else

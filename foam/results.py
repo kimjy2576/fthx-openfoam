@@ -57,9 +57,14 @@ def read_case(case_dir: str | Path, p: FTHXParams) -> dict:
     if tout is not None:
         raw["t_air_out"] = tout
     raw["_thermal"] = thermal
-    raw["_converged"] = "SIMPLE solution converged" in \
-        (case / "log.solver").read_text(encoding="utf-8", errors="ignore") \
-        if (case / "log.solver").exists() else None
+    log = case / "log.solver"
+    if log.exists():
+        txt = log.read_text(encoding="utf-8", errors="ignore")
+        # residualControl 도달이면 converged, endTime 도달이면 미수렴 종료
+        raw["_converged"] = "SIMPLE solution converged" in txt
+        raw["_end_reached"] = txt.rstrip().endswith("End")
+    else:
+        raw["_converged"] = None
     return raw
 
 
@@ -103,6 +108,7 @@ def write_results(case_dir: str | Path, p: FTHXParams,
         "UA_ref_pred_W_K": pred["UA_ref_W_K"],
         "V_core_m3": core_volume_m3(p),
         "converged": raw.get("_converged"),
+        "end_reached": raw.get("_end_reached"),
     }
     if "UA_W_K" in m and pred["UA_W_K"]:
         extra["UA_err_pct"] = (m["UA_W_K"] - pred["UA_W_K"]) / pred["UA_W_K"] * 100.0

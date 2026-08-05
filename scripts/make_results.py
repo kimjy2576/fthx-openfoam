@@ -13,11 +13,34 @@ from foam.results import write_results     # noqa: E402
 from foam.jf_inject import load_jf         # noqa: E402
 from fthx import presets                   # noqa: E402
 
+def winpath(x):
+    """WSL 경로를 Windows python 이 읽을 수 있게 정규화.
+
+    /mnt/c/foo  → C:/foo        (드라이브 마운트)
+    /home/user  → \\\\wsl$\\...    (WSL 파일시스템, 배포판 이름 필요)
+    Windows python 이 아니면 그대로 둔다.
+    """
+    if not x or sys.platform != "win32":
+        return x
+    p = str(x)
+    if p.startswith("/mnt/") and len(p) > 6 and p[6] == "/":
+        return f"{p[5].upper()}:/{p[7:]}"
+    if p.startswith(("/home/", "/root", "/tmp")):
+        import subprocess
+        try:
+            return subprocess.run(["wsl", "wslpath", "-w", p],
+                                  capture_output=True, text=True,
+                                  timeout=10).stdout.strip() or p
+        except Exception:
+            return p
+    return p
+
+
 a = sys.argv[1:]
 if not a:
     print(__doc__)
     sys.exit(2)
-case = Path(a[0]).expanduser()
+case = Path(winpath(a[0])).expanduser()
 if not case.is_dir():
     # WSL 경로를 Windows python 에 넘긴 경우 안내 (자주 걸림)
     hint = ""
@@ -29,7 +52,7 @@ if not case.is_dir():
     sys.exit(2)
 name = a[1] if len(a) > 1 else "tutorial"
 jf = load_jf(a[2]) if len(a) > 2 and a[2] not in ("-", "none") else None
-csvp = a[3] if len(a) > 3 else None
+csvp = winpath(a[3]) if len(a) > 3 else None
 if csvp:
     Path(csvp).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
