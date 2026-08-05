@@ -235,8 +235,11 @@ class TestCellCase:
                   "0/U", "0/p", "0/T", "constant/transportProperties",
                   "Allrun.mesh"):
             assert (c / f).exists(), f
-        # 관만 STL — 핀·경계는 blockMesh 가 담당
-        assert set(r["stl"]) == {"solid_tube_r01", "solid_tube_r02"}
+        # 관만 STL — 핀·경계는 blockMesh 가 담당.
+        # 이름은 core 가 정하므로(1/4→full-pitch 전환 시 r01→r01a/r01b)
+        # 하드코딩하지 않고 접두사로만 검사
+        assert r["stl"], "관 STL 이 없음"
+        assert all(n.startswith("solid_tube") for n in r["stl"])
         assert not (c / "constant/triSurface/solid_fin.stl").exists()
 
     def test_background_matches_air_domain(self, tmp_path):
@@ -246,8 +249,10 @@ class TestCellCase:
         p = presets.PRESETS["cell"]()
         r = write_cell_case(p, str(tmp_path / "c"), force=True)
         g = cell.cell_geometry(p)
-        assert abs(r["z_range_mm"][0] - g["t_f_half"]) < 1e-9
-        assert abs(r["z_range_mm"][1] - g["Lz"]) < 1e-9
+        # 1/4 도메인: z 는 gap 중앙(0) ~ 핀 하면, y 는 Pt/2
+        assert r["z_range_mm"][0] == 0.0
+        assert abs(r["z_range_mm"][1] - g["fin_z"][0]) < 1e-9
+        assert abs(r["Ly_mm"] - g["Ly"] / 2.0) < 1e-9
 
     def test_laminar_and_symmetry(self, tmp_path):
         """Re_Dh<2300 층류 — 난류 모델을 켜면 h 과대평가 (cell_flow 경고)"""
@@ -260,4 +265,5 @@ class TestCellCase:
         assert "laminar" in tp
         bm = (tmp_path / "c/system/blockMeshDict").read_text("utf-8")
         assert bm.count("symmetryPlane") == 3      # sym_z, sym_y0, sym_y1
+        assert "cyclic" not in bm                  # 대칭면이므로 주기 불필요
         assert "fin_wall" in bm

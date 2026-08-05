@@ -59,6 +59,12 @@ def write_cell_case(p: FTHXParams, case_dir: str, force: bool = False,
                     h_xy: float = 0.25, nz_gap: int = 10) -> dict:
     """단위셀 케이스 생성. 반환: 사이징 + 유동 조건 + 게이트값."""
     g = CELL.cell_geometry(p)
+    # core 는 full-pitch 주기 도메인(y=Pt, z=Fp, 핀이 z 중앙)을 만들지만,
+    # y=0/Pt 는 둘 다 관 중심, z=0/Fp 는 둘 다 gap 중앙이므로 전부 대칭면.
+    # → 1/4 (y 0~Pt/2, z 0~핀하면) 만 풀면 됨. 셀이 4배 줄고 cyclic 불필요.
+    Ly = g["Ly"] / 2.0 if g.get("periodic") else g["Ly"]
+    z_lo = 0.0                       # gap 중앙 = 대칭면
+    z_hi = g["fin_z"][0] if "fin_z" in g else g["Lz"]   # 핀 하면 = wall
     sz = CELL.cell_sizing(p, h_xy=h_xy, nz_gap=nz_gap)
     fl = CELL.cell_flow(p)
     case = Path(case_dir)
@@ -70,8 +76,7 @@ def write_cell_case(p: FTHXParams, case_dir: str, force: bool = False,
     tol = min(p.fin.t_f, sz["hz_gap_mm"]) / 8.0
     stl_names, meta = _export_cell_stl(p, case / "constant" / "triSurface", tol)
 
-    Lx, Ly, Lz = g["Lx"], g["Ly"], g["Lz"]
-    z0 = g["t_f_half"]                       # 핀 상면
+    Lx = g["Lx"]
     nx = max(2, round(Lx / h_xy))
     ny = max(2, round(Ly / h_xy))
     nz = max(2, nz_gap)
@@ -82,8 +87,8 @@ def write_cell_case(p: FTHXParams, case_dir: str, force: bool = False,
         f.write_text(_hdr(obj or f.name, loc or str(Path(rel).parent)) + body,
                      encoding="utf-8", newline="\n")
 
-    v = [(0, 0, z0), (Lx, 0, z0), (Lx, Ly, z0), (0, Ly, z0),
-         (0, 0, Lz), (Lx, 0, Lz), (Lx, Ly, Lz), (0, Ly, Lz)]
+    v = [(0, 0, z_lo), (Lx, 0, z_lo), (Lx, Ly, z_lo), (0, Ly, z_lo),
+         (0, 0, z_hi), (Lx, 0, z_hi), (Lx, Ly, z_hi), (0, Ly, z_hi)]
     w("system/blockMeshDict", f"""
 convertToMeters 0.001;
 
@@ -101,8 +106,8 @@ boundary
 (
     cell_inlet  {{ type patch;          faces ((0 4 7 3)); }}
     cell_outlet {{ type patch;          faces ((1 2 6 5)); }}
-    fin_wall    {{ type wall;           faces ((0 3 2 1)); }}   // z = t_f/2
-    sym_z       {{ type symmetryPlane;  faces ((4 5 6 7)); }}   // z = Fp/2
+    sym_z       {{ type symmetryPlane;  faces ((0 3 2 1)); }}   // z=0 gap 중앙
+    fin_wall    {{ type wall;           faces ((4 5 6 7)); }}   // 핀 하면
     sym_y0      {{ type symmetryPlane;  faces ((0 1 5 4)); }}
     sym_y1      {{ type symmetryPlane;  faces ((3 7 6 2)); }}
 );
@@ -110,13 +115,13 @@ boundary
 
     geom = "".join(f'    {n}.stl {{ type triSurfaceMesh; name {n}; }}\n'
                    for n in stl_names)
-    feat = "".join(f'    {{ file "{n}.eMesh"; level 1; }}\n' for n in stl_names)
+    feat = "".join(f'    {{ file "{n}.eMesh"; level 0; }}\n' for n in stl_names)
     surf = "".join(f"        {n}\n        {{\n            level (1 2);\n"
                    f"            patchInfo {{ type wall; }}\n        }}\n"
                    for n in stl_names)
     # 내부점: 입구 근처, 관에서 먼 곳 (상류에는 관이 없음)
     loc = ((g["x_core"][0] * 0.5) / 1000.0, (Ly * 0.5) / 1000.0,
-           ((z0 + Lz) * 0.5) / 1000.0)
+           ((z_lo + z_hi) * 0.5) / 1000.0)
     w("system/snappyHexMeshDict", f"""
 castellatedMesh true;
 snap            true;
@@ -131,7 +136,7 @@ castellatedMeshControls
     maxLocalCells       4000000;
     maxGlobalCells      12000000;
     minRefinementCells  0;
-    nCellsBetweenLevels 2;
+    nCellsBetweenLevels 3;
     resolveFeatureAngle 45;
     features ( 
 {feat}    );
@@ -370,7 +375,7 @@ echo "→ 이 값을 foam.cell_case.report_jf() 에 넣으면 j/f 가 나옴"
 
     return {"geometry": g, "sizing": sz, "flow": fl, "case_dir": str(case),
             "stl": stl_names, "blocks": [nx, ny, nz],
-            "z_range_mm": [z0, Lz], "tol_mm": tol,
+            "z_range_mm": [z_lo, z_hi], "Ly_mm": Ly, "tol_mm": tol,
             "gate": {"cells_est": sz["cells_est"],
                      "aspect_ratio": sz["aspect_ratio"]}}
 
@@ -381,7 +386,9 @@ def report_jf(p: FTHXParams, pCore0: float, pCore1: float,
     g = CELL.cell_geometry(p)
     fl = CELL.cell_flow(p)
     rho, cp = fl["rho"], fl["cp"]
-    A_in = (g["Ly"] * (g["Lz"] - g["t_f_half"])) / 1e6          # [m²]
+    Ly = g["Ly"] / 2.0 if g.get("periodic") else g["Ly"]
+    z_hi = g["fin_z"][0] if "fin_z" in g else g["Lz"]
+    A_in = (Ly * z_hi) / 1e6                                    # [m²] 1/4 입구
     m_dot = rho * fl["V_face_ms"] * A_in
     q = m_dot * cp * (fl["T_in_K"] - Tout_K)
     A = CELL.heat_area_m2(p)
