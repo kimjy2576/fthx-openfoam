@@ -18,9 +18,20 @@ if not a:
     print(__doc__)
     sys.exit(2)
 case = Path(a[0]).expanduser()
+if not case.is_dir():
+    # WSL 경로를 Windows python 에 넘긴 경우 안내 (자주 걸림)
+    hint = ""
+    if str(case).startswith(("/home", "\\home", "/root")):
+        hint = ("\n  → WSL 경로를 Windows python 에 넘긴 것 같음. "
+                "wslpath 로 변환할 것:\n"
+                f'     ... scripts/make_results.py "$(wslpath -w {a[0]})" ...')
+    print(f"[오류] 케이스 디렉터리 없음: {case}{hint}", file=sys.stderr)
+    sys.exit(2)
 name = a[1] if len(a) > 1 else "tutorial"
 jf = load_jf(a[2]) if len(a) > 2 and a[2] not in ("-", "none") else None
 csvp = a[3] if len(a) > 3 else None
+if csvp:
+    Path(csvp).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
 r = write_results(case, presets.PRESETS[name](), csvp, jf=jf)
 row = r["row"]
