@@ -318,3 +318,30 @@ class TestJfInject:
         f.write_text(json.dumps({"j": 0.04}), encoding="utf-8")
         with _pt.raises(ValueError):
             load_jf(f)
+
+    def test_core_volume_excludes_tubes(self):
+        """D4 회귀: fvOptions 가 적용되는 cellZone 은 관 체적을 제외한
+           영역. 예측에 core_bbox 를 쓰면 V 가 ~13% 과대 → UA 과대평가"""
+        import math
+        from fthx import presets
+        from foam._thermal_closure import core_volume_m3
+        p = presets.tutorial()
+        cb = p.core_bbox
+        V_box = (cb[1]-cb[0]) * (cb[3]-cb[2]) * (cb[5]-cb[4]) / 1e9
+        V = core_volume_m3(p)
+        assert V < V_box
+        n = len(p.tube_centers())
+        V_t = n * math.pi/4 * (p.tube.Do/1000)**2 * (cb[5]-cb[4])/1000
+        assert abs(V - (V_box - V_t)) < 1e-12
+
+    def test_ua_uses_same_volume_as_fvoptions(self):
+        """예측 UA 와 hv_eff 가 같은 체적을 써야 자기일관"""
+        from fthx import presets
+        from foam._thermal_closure import (ua_predicted, thermal_closure,
+                                           core_volume_m3)
+        p = presets.tutorial()
+        jf = {"j": 0.042443, "f": 0.056622}
+        u, t = ua_predicted(p, jf=jf), thermal_closure(p, jf=jf)
+        V = core_volume_m3(p)
+        assert abs(u["UA_air_W_K"] - t["hv_air_W_m3K"] * V) < 1e-9
+        assert abs(u["UA_W_K"] - t["hv_W_m3K"] * V) < 1e-9      # hv_eff 정의

@@ -21,6 +21,19 @@ from fthx.params import FTHXParams
 T_STD = 298.15      # OpenFOAM sensibleEnthalpy 기준온도 [K]
 
 
+def core_volume_m3(p: FTHXParams) -> float:
+    """포러스 cellZone 의 실제 체적 [m³] — 코어 bbox 에서 관 체적 제외.
+
+    CFD 의 fvOptions 가 적용되는 영역과 예측식의 V 를 일치시키기 위함.
+    """
+    cb = p.core_bbox
+    V_box = (cb[1] - cb[0]) * (cb[3] - cb[2]) * (cb[5] - cb[4]) / 1e9
+    L = (cb[5] - cb[4]) / 1000.0
+    n = len(p.tube_centers()) if hasattr(p, "tube_centers") else 1
+    V_tube = n * math.pi / 4.0 * (p.tube.Do / 1000.0) ** 2 * L
+    return max(V_box - V_tube, 1e-12)
+
+
 def thermal_closure(p: FTHXParams, n_circuit: int = 1,
                     jf: dict | None = None) -> dict:
     from .jf_inject import scaled_air_side
@@ -39,9 +52,12 @@ def thermal_closure(p: FTHXParams, n_circuit: int = 1,
     k_r = 0.09        # W/mK
     h_ref = 0.023 * Re ** 0.8 * Pr_r ** 0.3 * k_r / D
     cb = p.core_bbox
-    V_core = ((cb[1] - cb[0]) * (cb[3] - cb[2]) * (cb[5] - cb[4])) / 1e9
     L_span = (cb[5] - cb[4]) / 1000.0
     n_tube = len(p.tube_centers()) if hasattr(p, "tube_centers") else 1
+    # ⚠ fvOptions 는 cellZone(= 코어에서 관 체적을 뺀 유체 영역)에 적용됨.
+    #   예측에 core_bbox 를 그대로 쓰면 V 가 ~13% 과대 → UA 과대평가.
+    #   (D4: 이 불일치가 j/f 주입으로 hv 가 3배 커지자 드러남)
+    V_core = core_volume_m3(p)
     t_wall = (p.tube.Do - p.tube.Di) / 2000.0                     # [m]
     k_tube = getattr(p.tube, "k_tube", 386.0)
     Bi = h_ref * t_wall / k_tube
@@ -82,8 +98,7 @@ def ua_predicted(p: FTHXParams, n_circuit: int = 1,
                  jf: dict | None = None) -> dict:
     """예측 UA — CFD 결과와 대조할 게이트값 (공기측·냉매측 직렬)."""
     tc = thermal_closure(p, n_circuit, jf=jf)
-    cb = p.core_bbox
-    V_core = ((cb[1] - cb[0]) * (cb[3] - cb[2]) * (cb[5] - cb[4])) / 1e9
+    V_core = core_volume_m3(p)
     UA = 1.0 / (1.0 / tc["UA_air_W_K"] + 1.0 / tc["UA_ref_W_K"])
     return {"V_core_m3": V_core, "UA_air_W_K": tc["UA_air_W_K"],
             "UA_ref_W_K": tc["UA_ref_W_K"], "UA_W_K": UA,
