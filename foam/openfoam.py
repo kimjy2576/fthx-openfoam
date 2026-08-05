@@ -305,7 +305,8 @@ grep -E "Mesh OK|Failed .* mesh checks" log.checkMesh
 
 
 def write_case(p: FTHXParams, case_dir: str, force: bool = False,
-               mode: str = "air", thermal: bool = True) -> dict:
+               mode: str = "air", thermal: bool = True,
+               jf: dict | None = None) -> dict:
     """tutorial 급 형상의 snappy 케이스 생성. 반환: plan + 파일 목록.
 
     mode="air": 공기측 단일 region — fluid_ref 제외, 관 표면=wall patch.
@@ -385,7 +386,7 @@ def write_case(p: FTHXParams, case_dir: str, force: bool = False,
     pl["surfaces"] = {n: e["level"] for n, e in entries.items() if not e["zone"]}
     pl["mode"] = mode
     if mode == "air":
-        pl["physics"] = write_physics(p, case, thermal=thermal)
+        pl["physics"] = write_physics(p, case, thermal=thermal, jf=jf)
     pl["case_dir"] = str(case)
     pl["gate"] = {
         "fluent_ref_cells": 68641,
@@ -398,7 +399,7 @@ def write_case(p: FTHXParams, case_dir: str, force: bool = False,
 # ══════════════════════════════════════════════════════════════════
 #  F3 — 물리 설정 (공기측 단일 region · simpleFoam · 포러스 fvOptions)
 # ══════════════════════════════════════════════════════════════════
-def porous_df(p: FTHXParams) -> dict:
+def porous_df(p: FTHXParams, jf: dict | None = None) -> dict:
     """closure.air_side() 의 Fluent 형 계수를 OpenFOAM DarcyForchheimer 로.
 
     Fluent:   dp/L = (mu/alpha)·u + C2·(rho/2)·u²   (superficial u)
@@ -408,8 +409,8 @@ def porous_df(p: FTHXParams) -> dict:
     핀은 z(적층 방향) 유동을 막음 → 횡방향 z 는 ×1e3 저항 (관행값).
     y 는 핀 채널 안에서 자유 → x 와 동일로 근사.
     """
-    from fthx import closure
-    a = closure.air_side(p)
+    from .jf_inject import scaled_air_side
+    a = scaled_air_side(p, jf)          # jf=None 이면 상관식 그대로
     od = p.operating_derived()["air"]
     # ⚠ closure 의 alpha 와 C2 는 각각 '단독으로' dp 전체를 재현하는
     #   상호배타적 폐합임 (mu·(1/alpha)·u·W ≡ dp, C2·W·(rho/2)u² ≡ dp).
@@ -417,12 +418,15 @@ def porous_df(p: FTHXParams) -> dict:
     #   실측: d+f 동시 적용 시 CFD dP 16.0 Pa (해석해 4.16 의 ~4배).
     #   저유량 스윕에서는 Re 별 재폐합 필요 (closure 규약 이슈로 기록).
     return {"d": 0.0, "f": a["C2_1perm"], "block_factor": 1e3,
+            "jf_source": a.get("jf_source", "closure"),
+            "j_used": a["j"], "f_used": a["f"],
             "dp_core_Pa": a["dp_core_Pa"], "porosity": a["porosity"],
             "rho": od["rho"], "mu": od["mu"], "nu": od["mu"] / od["rho"],
             "U_face": p.operating.air.V_face}
 
 
-def write_physics(p: FTHXParams, case: Path, thermal: bool = True) -> dict:
+def write_physics(p: FTHXParams, case: Path, thermal: bool = True,
+                  jf: dict | None = None) -> dict:
     """0/ · constant/ · fvOptions · 솔버용 system · Allrun.solve 생성.
 
     thermal=True → buoyantSimpleFoam + 열 폐합 (B안):
@@ -433,10 +437,10 @@ def write_physics(p: FTHXParams, case: Path, thermal: bool = True) -> dict:
     thermal=False → simpleFoam 등온 (ΔP 만)
     """
     from . import _thermal_closure as TC          # noqa
-    pf = porous_df(p)
+    pf = porous_df(p, jf)
     U, nu, rho = pf["U_face"], pf["nu"], pf["rho"]
-    th = TC.thermal_closure(p) if thermal else None
-    UA = TC.ua_predicted(p)["UA_W_K"] if thermal else 0.0
+    th = TC.thermal_closure(p, jf=jf) if thermal else None
+    UA = TC.ua_predicted(p, jf=jf)["UA_W_K"] if thermal else 0.0
     dk = p.duct_box
     H = (dk["y1"] - dk["y0"]) / 1000.0                # 덕트 높이 [m]
     I, L = 0.05, 0.1 * H                              # 난류강도 5%, 길이척도 0.1H
@@ -792,4 +796,5 @@ echo "UA_예측(closure) = {UA:.3f} W/K   — 게이트: 오차 15% 이내"
     if thermal:
         out.update({"hv_W_m3K": th["hv_W_m3K"], "h_ref": th["h_ref_W_m2K"],
                     "Bi": th["Bi"], "UA_pred_W_K": UA})
+    out.update({k: pf[k] for k in ("jf_source", "j_used", "f_used")})
     return out

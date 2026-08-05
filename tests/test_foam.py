@@ -267,3 +267,54 @@ class TestCellCase:
         assert bm.count("symmetryPlane") == 3      # sym_z, sym_y0, sym_y1
         assert "cyclic" not in bm                  # 대칭면이므로 주기 불필요
         assert "fin_wall" in bm
+
+
+@needs_cad
+@needs_cp
+class TestJfInject:
+    """D→B 주입 — 단위셀 j/f 로 풀사이즈 포러스·열 계수를 스케일"""
+
+    JF = {"j": 0.042443, "f": 0.056622, "source": "openfoam_cell"}
+
+    def test_none_keeps_closure(self):
+        from fthx import presets, closure
+        from foam.jf_inject import scaled_air_side
+        p = presets.tutorial()
+        a = scaled_air_side(p, None)
+        b = closure.air_side(p)
+        assert a["j"] == b["j"] and a["C2_1perm"] == b["C2_1perm"]
+        assert a["jf_source"] == "closure"
+
+    def test_ratio_scaling_is_exact(self):
+        """C2 ∝ f, h ∝ j — 비율만 곱하므로 공식 재구현 없음"""
+        from fthx import presets, closure
+        from foam.jf_inject import scaled_air_side
+        p = presets.tutorial()
+        base, cell = closure.air_side(p), scaled_air_side(p, self.JF)
+        rj, rf = self.JF["j"] / base["j"], self.JF["f"] / base["f"]
+        assert abs(cell["C2_1perm"] / base["C2_1perm"] - rf) < 1e-9
+        assert abs(cell["h_W_m2K"] / base["h_W_m2K"] - rj) < 1e-9
+        assert abs(cell["hv_W_m3K"] / base["hv_W_m3K"] - rj) < 1e-9
+        assert cell["j"] == self.JF["j"] and cell["f"] == self.JF["f"]
+
+    def test_case_uses_injected_jf(self, tmp_path):
+        from fthx import presets
+        from foam.openfoam import write_case
+        p = presets.tutorial()
+        a = write_case(p, str(tmp_path / "a"), force=True)
+        b = write_case(p, str(tmp_path / "b"), force=True, jf=self.JF)
+        assert a["physics"]["jf_source"] == "closure"
+        assert b["physics"]["jf_source"] == "openfoam_cell"
+        assert b["physics"]["f"] > a["physics"]["f"]       # C2 스케일됨
+        assert b["physics"]["UA_pred_W_K"] > a["physics"]["UA_pred_W_K"]
+        fv = (tmp_path / "b/system/fvOptions").read_text("utf-8")
+        assert f"{b['physics']['f']:.6f}" in fv
+
+    def test_load_jf_requires_keys(self, tmp_path):
+        import json
+        import pytest as _pt
+        from foam.jf_inject import load_jf
+        f = tmp_path / "bad.json"
+        f.write_text(json.dumps({"j": 0.04}), encoding="utf-8")
+        with _pt.raises(ValueError):
+            load_jf(f)

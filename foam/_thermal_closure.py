@@ -21,9 +21,12 @@ from fthx.params import FTHXParams
 T_STD = 298.15      # OpenFOAM sensibleEnthalpy 기준온도 [K]
 
 
-def thermal_closure(p: FTHXParams, n_circuit: int = 1) -> dict:
+def thermal_closure(p: FTHXParams, n_circuit: int = 1,
+                    jf: dict | None = None) -> dict:
+    from .jf_inject import scaled_air_side
     s = closure.summary(p, n_circuit)
-    a, fin, ref = s["air"], s["fin"], s["ref"]
+    fin, ref = s["fin"], s["ref"]
+    a = scaled_air_side(p, jf)          # 공기측만 단위셀 j/f 로 대체
     od = p.operating_derived()["air"]
     cp, mu = od["cp"], od["mu"]
     k_air = 0.0263
@@ -53,13 +56,15 @@ def thermal_closure(p: FTHXParams, n_circuit: int = 1) -> dict:
         "k_tube": k_tube, "Bi": Bi,
         "cp": cp, "mu": mu, "Pr": cp * mu / k_air,
         "m_dot_air_kgs": od["m_dot_kgs"],
+        "jf_source": a.get("jf_source", "closure"),
         "note": "Fluent M4 equilibrium 과 동일 폐합. 관벽은 B안(두께=물성)",
     }
 
 
-def ua_predicted(p: FTHXParams, n_circuit: int = 1) -> dict:
+def ua_predicted(p: FTHXParams, n_circuit: int = 1,
+                 jf: dict | None = None) -> dict:
     """예측 UA — CFD 결과와 대조할 게이트값."""
-    tc = thermal_closure(p, n_circuit)
+    tc = thermal_closure(p, n_circuit, jf=jf)
     d = p.derived()
     cb = p.core_bbox                      # (x0,x1,y0,y1,z0,z1) [mm]
     V_core = ((cb[1] - cb[0]) * (cb[3] - cb[2]) * (cb[5] - cb[4])) / 1e9   # [m³]
