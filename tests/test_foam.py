@@ -417,3 +417,57 @@ class TestResults:
         raw = read_case(c, p)
         rho = p.operating_derived()["air"]["rho"]
         assert abs(raw["p_air_in"] - 101333.1 * rho) < 1e-6
+
+
+@needs_cad
+@needs_cp
+class TestSweep:
+    """파라미터 스윕 — 조합 전개·오버라이드·무인 실행"""
+
+    def test_expand_is_cartesian(self):
+        from foam.sweep import expand
+        c = expand({"V_face": [1, 2, 3], "FPI": [12, 14]})
+        assert len(c) == 6
+        assert {tuple(sorted(x.items())) for x in c} == {
+            (("FPI", f), ("V_face", v)) for v in (1, 2, 3) for f in (12, 14)}
+
+    def test_overrides_apply(self):
+        from fthx import presets
+        from foam.sweep import apply_overrides
+        p = presets.tutorial()
+        q = apply_overrides(p, {"V_face": 3.5, "FPI": 16})
+        assert q.operating.air.V_face == 3.5 and q.fin.FPI == 16
+        assert p.operating.air.V_face == 2.0        # 원본 불변
+        # 점 표기도 지원
+        r = apply_overrides(p, {"operating.air.T_in": 35.0})
+        assert r.operating.air.T_in == 35.0
+
+    def test_labels_are_filename_safe(self):
+        from foam.sweep import case_label
+        s = case_label({"V_face": 1.5, "fin_type": "louver"})
+        assert s == "V_face1p5_fin_typelouver"
+        assert "." not in s and "/" not in s and " " not in s
+
+    def test_generation_only(self, tmp_path):
+        """solve=False 로 케이스만 — 오버라이드가 실제로 반영되는지"""
+        from fthx import presets
+        from foam.sweep import run_sweep
+        s = run_sweep(presets.tutorial(), {"V_face": [1.5]},
+                      tmp_path / "w", tmp_path / "r.csv",
+                      solve=False, keep_cases=True)
+        assert s["ok"] == 1 and s["failed"] == 0
+        u = (tmp_path / "w/case_V_face1p5/0/U").read_text("utf-8")
+        assert "(1.5 0 0)" in u
+        assert (tmp_path / "w/sweep_summary.json").exists()
+
+    def test_failure_does_not_stop_sweep(self, tmp_path):
+        """한 조합이 실패해도 나머지는 계속 — 사유는 errors 에"""
+        from fthx import presets
+        from foam.sweep import run_sweep
+        s = run_sweep(presets.tutorial(),
+                      {"V_face": [1.5], "tube.Do": [9.52, -1.0]},
+                      tmp_path / "w", tmp_path / "r.csv",
+                      solve=False, keep_cases=False)
+        assert s["n"] == 2
+        assert s["ok"] >= 1 and s["failed"] >= 1
+        assert s["errors"][0]["error"]
