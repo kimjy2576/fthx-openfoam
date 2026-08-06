@@ -179,6 +179,7 @@ foam/       foam_stl.py    F0 STL 내보내기 + 3종 검증
             jf_inject.py   D→B 주입 (단위셀 j/f → 포러스·열 계수)
             results.py     F5 후처리 → results.csv (core post 스키마)
             sweep.py       파라미터 스윕 (조합 전개·무인 실행·실패 격리)
+            cht_case.py    3영역 conjugate (공기·관벽·냉매) — Fluent 대등
 scripts/    check.sh(통합) · make_stl · make_case · make_jf · make_results
             run_sweep · compare_paths(O5) · verify_stl
 docs/       verify-routine.md · openfoam-issues.md (미해결 항목)
