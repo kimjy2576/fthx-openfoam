@@ -471,3 +471,47 @@ class TestSweep:
         assert s["n"] == 2
         assert s["ok"] >= 1 and s["failed"] >= 1
         assert s["errors"][0]["error"]
+
+
+class TestComparePaths:
+    """O5 — Fluent↔OpenFOAM results.csv 교차비교 (스키마 공유 전제)"""
+
+    def _csv(self, path, **over):
+        import csv
+        h = ["case", "Nr", "Nt", "FPI", "fin_type", "Pt_mm", "Pl_mm",
+             "V_face_ms", "T_air_in_C", "T_sat_C", "dP_air_Pa", "Q_W", "UA_W_K"]
+        row = dict(zip(h, ["t1", "1", "1", "14.0", "plain", "25.4", "22.0",
+                           "2.0", "27.0", "7.0", "4.0", "45.0", "2.9"]))
+        row.update(over)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=h)
+            w.writeheader()
+            w.writerow(row)
+
+    def test_matches_on_condition_keys(self, tmp_path, capsys):
+        import subprocess
+        import sys as _s
+        from pathlib import Path as _P
+        a, b = tmp_path / "f.csv", tmp_path / "o.csv"
+        self._csv(a)
+        self._csv(b, dP_air_Pa="8.0", UA_W_K="3.0")
+        script = _P(__file__).resolve().parents[1] / "scripts" / "compare_paths.py"
+        r = subprocess.run([_s.executable, str(script), str(a), str(b)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0
+        assert "공통 조건 1건" in r.stdout
+        assert "+100.0" in r.stdout          # dP 4→8
+        assert "15% 초과 항목 1/" in r.stdout
+
+    def test_reports_no_match(self, tmp_path):
+        import subprocess
+        import sys as _s
+        from pathlib import Path as _P
+        a, b = tmp_path / "f.csv", tmp_path / "o.csv"
+        self._csv(a)
+        self._csv(b, V_face_ms="3.0")        # 조건이 다름
+        script = _P(__file__).resolve().parents[1] / "scripts" / "compare_paths.py"
+        r = subprocess.run([_s.executable, str(script), str(a), str(b)],
+                           capture_output=True, text=True)
+        assert r.returncode == 1
+        assert "짝지을 조건이 없음" in r.stdout
