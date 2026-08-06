@@ -515,3 +515,65 @@ class TestComparePaths:
                            capture_output=True, text=True)
         assert r.returncode == 1
         assert "짝지을 조건이 없음" in r.stdout
+
+
+@needs_cad
+@needs_cp
+class TestChtCase:
+    """O6 — 3영역 conjugate (공기·관벽·냉매). Fluent 대등 옵션"""
+
+    def test_three_region_files(self, tmp_path):
+        from fthx import presets
+        from foam.cht_case import write_cht_case
+        r = write_cht_case(presets.tutorial(), str(tmp_path / "c"), force=True)
+        c = tmp_path / "c"
+        assert r["regions"] == ["air", "tube", "ref"]
+        for f in ("constant/regionProperties", "system/fvSchemes",
+                  "constant/g", "Allrun.mesh", "Allrun.solve",
+                  "0/air/T", "0/air/U", "0/tube/T", "0/ref/T", "0/ref/U",
+                  "constant/air/thermophysicalProperties",
+                  "constant/tube/thermophysicalProperties",
+                  "constant/ref/thermophysicalProperties",
+                  "system/air/topoSetDict", "system/air/fvOptions"):
+            assert (c / f).exists(), f
+
+    def test_core_zone_absent_in_snappy(self, tmp_path):
+        """공기가 한 region 으로 남으려면 코어를 cellZone 으로 잡으면 안 됨
+           (실측: 잡으면 상류·코어·하류 3조각으로 쪼개짐)"""
+        from fthx import presets
+        from foam.cht_case import write_cht_case
+        write_cht_case(presets.tutorial(), str(tmp_path / "c"), force=True)
+        snap = (tmp_path / "c/system/snappyHexMeshDict").read_text("utf-8")
+        assert "fluid_air_core" not in snap
+        assert "solid_tube" in snap and "fluid_ref" in snap
+        # 포러스는 분리 후 topoSet 으로 재생성
+        ts = (tmp_path / "c/system/air/topoSetDict").read_text("utf-8")
+        assert "porousCore" in ts and "boxToCell" in ts
+
+    def test_water_and_copper_properties(self, tmp_path):
+        from fthx import presets
+        from foam.cht_case import write_cht_case
+        write_cht_case(presets.tutorial(), str(tmp_path / "c"), force=True)
+        ref = (tmp_path / "c/constant/ref/thermophysicalProperties").read_text("utf-8")
+        assert "rhoConst" in ref and "999.7" in ref     # 단상 물
+        tube = (tmp_path / "c/constant/tube/thermophysicalProperties").read_text("utf-8")
+        assert "heSolidThermo" in tube and "386" in tube  # 구리
+
+    def test_coupled_bc_on_all_regions(self, tmp_path):
+        from fthx import presets
+        from foam.cht_case import write_cht_case
+        write_cht_case(presets.tutorial(), str(tmp_path / "c"), force=True)
+        for r, kappa in (("air", "fluidThermo"), ("tube", "solidThermo"),
+                         ("ref", "fluidThermo")):
+            t = (tmp_path / f"c/0/{r}/T").read_text("utf-8")
+            assert "turbulentTemperatureRadCoupledMixed" in t, r
+            assert kappa in t, r
+
+    def test_mass_flow_from_params(self, tmp_path):
+        from fthx import presets
+        from foam.cht_case import write_cht_case
+        p = presets.tutorial()
+        r = write_cht_case(p, str(tmp_path / "c"), force=True)
+        assert r["m_ref_kgs"] == p.operating.ref.m_total
+        u = (tmp_path / "c/0/ref/U").read_text("utf-8")
+        assert "flowRateInletVelocity" in u and "massFlowRate" in u
