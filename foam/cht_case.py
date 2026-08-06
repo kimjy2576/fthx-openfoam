@@ -437,6 +437,10 @@ laplacianSchemes { default Gauss linear corrected; }
 interpolationSchemes { default linear; }
 snGradSchemes   { default corrected; }
 """, obj="fvSchemes")
+        # ⚠ 압력 기준점: 출구 fixedValue 가 있는 region(공기)에 pRef 를 또
+        #   주면 과구속 → GAMG 가 1000 it 돌고도 잔차가 안 줄어듦 (실측
+        #   0.646→0.468). 밀폐 region(냉매)에만 준다.
+        closed = r == REF
         _w(case, f"system/{r}/fvSolution", ("""
 solvers
 {
@@ -444,20 +448,42 @@ solvers
 }
 SIMPLE { nNonOrthogonalCorrectors 1; }
 relaxationFactors { equations { h 0.7; } }
-""" if solid else """
+""" if solid else f"""
 solvers
-{
-    p_rgh { solver GAMG; smoother GaussSeidel; tolerance 1e-8; relTol 0.01; }
-    "(U|h|k|epsilon)" { solver PBiCGStab; preconditioner DILU;
-                        tolerance 1e-8; relTol 0.1; }
-}
-SIMPLE { momentumPredictor yes; nNonOrthogonalCorrectors 1;
-         rhoMin 0.2; rhoMax 1200;
-         // 밀폐 region(냉매)은 압력 기준점이 필요
-         pRefCell 0; pRefValue 101325;
-         pRefPoint (0 0 0); }
-relaxationFactors { fields { rho 1.0; p_rgh 0.3; }
-                    equations { U 0.7; h 0.7; "(k|epsilon)" 0.7; } }
+{{
+    p_rgh
+    {{
+        solver          GAMG;
+        smoother        DICGaussSeidel;
+        tolerance       1e-7;
+        relTol          0.05;
+        maxIter         100;          // 헛도는 것 방지
+        nPreSweeps      0;
+        nPostSweeps     2;
+        cacheAgglomeration true;
+        nCellsInCoarsestLevel 100;
+        agglomerator    faceAreaPair;
+        mergeLevels     1;
+    }}
+    "(U|h|k|epsilon)"
+    {{
+        solver PBiCGStab; preconditioner DILU;
+        tolerance 1e-8; relTol 0.1;
+    }}
+}}
+SIMPLE
+{{
+    momentumPredictor yes;
+    nNonOrthogonalCorrectors 1;
+    rhoMin 0.2; rhoMax 1200;
+{'    pRefCell 0; pRefValue 101325;' if closed else '    // 출구 fixedValue 가 기준 — pRef 를 주면 과구속'}
+    residualControl {{ p_rgh 1e-3; U 1e-4; h 1e-4; }}
+}}
+relaxationFactors
+{{
+    fields    {{ rho 1.0; p_rgh 0.3; }}
+    equations {{ U 0.5; h 0.5; "(k|epsilon)" 0.5; }}
+}}
 """), obj="fvSolution")
     # 메시 단계(blockMesh/snappy/splitMeshRegions)는 최상위 system/ 을 봄
     _w(case, "system/fvSchemes",
