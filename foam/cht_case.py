@@ -190,7 +190,7 @@ regions
 """, obj="regionProperties")
 
     _write_air(case, p, pf, th, U, T_in, Pop, tube_n)
-    _write_tube(case, T_in)
+    _write_tube(case, T_in, Pop)
     _write_ref(case, m_ref, T_ref, Pop)
     _write_system(case, iterations)
     _write_allrun(case, tube_n, ref_n)
@@ -306,7 +306,7 @@ porousCore
 """, obj="fvOptions")
 
 
-def _write_tube(case, T0):
+def _write_tube(case, T0, Pop=101325.0):
     cpl = '".*_to_.*"'
     _w(case, f"0/{TUBE}/T", f"""
 dimensions [0 0 0 1 0 0 0];
@@ -333,6 +333,12 @@ mixture
     equationOfState {{ rho {COPPER['rho']}; }}
 }}
 """, obj="thermophysicalProperties")
+    # 고체 region 도 p 를 요구함 (thermo 가 참조)
+    _w(case, f"0/{TUBE}/p", f"""
+dimensions [1 -1 -2 0 0 0 0];
+internalField uniform {Pop};
+boundaryField {{ ".*" {{ type calculated; value uniform {Pop}; }} }}
+""", obj="p")
 
 
 def _write_ref(case, m_ref, T_ref, Pop):
@@ -342,11 +348,11 @@ dimensions [0 1 -1 0 0 0 0];
 internalField uniform (0 0 0.5);
 boundaryField
 {{
+    ".*"         {{ type noSlip; }}
+    {cpl}        {{ type noSlip; }}
     ".*inlet.*"  {{ type flowRateInletVelocity;
                     massFlowRate constant {m_ref:.6g}; value uniform (0 0 0.5); }}
     ".*outlet.*" {{ type zeroGradient; }}
-    {cpl}        {{ type noSlip; }}
-    ".*"         {{ type noSlip; }}
 }}
 """, obj="U")
     _w(case, f"0/{REF}/p_rgh", f"""
@@ -368,11 +374,11 @@ dimensions [0 0 0 1 0 0 0];
 internalField uniform {T_ref:.4f};
 boundaryField
 {{
+    ".*"         {{ type zeroGradient; }}
     ".*inlet.*"  {{ type fixedValue; value uniform {T_ref:.4f}; }}
     ".*outlet.*" {{ type zeroGradient; }}
     {cpl}
 {_coupled_T('fluidThermo', T_ref)}
-    ".*"         {{ type zeroGradient; }}
 }}
 """, obj="T")
     _w(case, f"constant/{REF}/thermophysicalProperties", f"""
@@ -446,7 +452,10 @@ solvers
                         tolerance 1e-8; relTol 0.1; }
 }
 SIMPLE { momentumPredictor yes; nNonOrthogonalCorrectors 1;
-         rhoMin 0.2; rhoMax 1200; }
+         rhoMin 0.2; rhoMax 1200;
+         // 밀폐 region(냉매)은 압력 기준점이 필요
+         pRefCell 0; pRefValue 101325;
+         pRefPoint (0 0 0); }
 relaxationFactors { fields { rho 1.0; p_rgh 0.3; }
                     equations { U 0.7; h 0.7; "(k|epsilon)" 0.7; } }
 """), obj="fvSolution")
@@ -500,6 +509,13 @@ movein constant/{ref0}      constant/{REF}
 movein system/{ref0}        system/{REF}
 movein 0/{ref0}             0/{REF}
 
+# splitMeshRegions 가 boundary 의 sampleRegion 에 원래 이름을 박아둠 —
+# 디렉터리만 바꾸면 "failed lookup of ..." 로 죽는다. 함께 치환할 것.
+for f in constant/*/polyMesh/boundary; do
+    [ -f "$f" ] || continue
+    sed -i "s/\\bdomain0\\b/{AIR}/g; s/\\b{tube0}\\b/{TUBE}/g; s/\\b{ref0}\\b/{REF}/g" "$f"
+done
+
 run topoSet -region {AIR}
 echo "──────── region 요약 ────────"
 for r in {AIR} {TUBE} {REF}; do
@@ -530,13 +546,13 @@ if [ "$NP" -gt 1 ] && command -v mpirun >/dev/null 2>&1; then
     echo ">>> chtMultiRegionSimpleFoam (${{NP}}코어)"
     mpirun --oversubscribe --allow-run-as-root -np "$NP" \\
         chtMultiRegionSimpleFoam -parallel > log.solver 2>&1 \\
-        || {{ echo "<<< 실패 — log.solver"; exit 1; }}
+        || {{ echo "<<< 실패 — log.solver"; tail -40 log.solver; exit 1; }}
     reconstructPar -allRegions -latestTime > log.reconstructPar 2>&1
     rm -rf processor*
 else
     echo ">>> chtMultiRegionSimpleFoam (직렬)"
     chtMultiRegionSimpleFoam > log.solver 2>&1 \\
-        || {{ echo "<<< 실패 — log.solver"; exit 1; }}
+        || {{ echo "<<< 실패 — log.solver"; tail -40 log.solver; exit 1; }}
 fi
 echo "<<< 솔버 OK"
 grep -E "^Time = " log.solver | tail -1
